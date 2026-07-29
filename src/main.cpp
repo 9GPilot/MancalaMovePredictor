@@ -55,6 +55,10 @@ int x, y, z;
 // My Global Variables
   mancala_board *gCurrent_mancala_board;
   lv_obj_t *gArr_of_bin_buttons[6]; // this will hold the LVGL buttons for the tab zero
+  lv_obj_t *gArr_of_max_goal_buttons[6];
+  char gTraceOfMoves[40]; // 40 to play it save
+  uint8_t gCurrMoveNumber;
+  uint8_t gMaxDepth;
 
 // My LVGL Objects
   static lv_obj_t *debug_label;
@@ -107,14 +111,43 @@ void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
 
 
 // PERSONAL FUNCTIONS
-  void printMancalaBoard(mancala_board board){
-    Serial.printf(" B [%u] [%u]<[%u] [%u]<[%u] [%u]\n", board.player_B_board_bins[5], board.player_B_board_bins[4], board.player_B_board_bins[3], board.player_B_board_bins[2], board.player_B_board_bins[1], board.player_B_board_bins[0]); 
-    Serial.printf("[%u]     Next Player: %c     \n", board.player_B_goal, board.playerToMove);
-    Serial.printf("                           [%u]\n", board.player_A_goal);
-    Serial.printf("   [%u] [%u]>[%u] [%u]>[%u] [%u]  A\n", board.player_A_board_bins[0], board.player_A_board_bins[1], board.player_A_board_bins[2], board.player_A_board_bins[3], board.player_A_board_bins[4], board.player_A_board_bins[5]); 
+  void printMancalaBoard(mancala_board *board, int depth){
+    Serial.printf("\n");
+    for (int i=0; i<depth; i++){
+      Serial.printf("\t");
+    }
+    if (board == NULL){
+      Serial.printf("NULL");
+      return;
+    }
+
+    Serial.printf("Board;%c,%u,", board->playerToMove, board->player_A_goal);
+    for (int i=0; i<6; i++){
+      Serial.printf("%u", board->player_A_board_bins[i]);
+      if (i<5){
+        Serial.printf(".");
+      }
+    } 
+    Serial.printf(",%u,", board->player_B_goal);
+    for (int i=0; i<6; i++){
+      Serial.printf("%u", board->player_B_board_bins[i]);
+      if (i<5){
+        Serial.printf(".");
+      }
+    } 
+    Serial.printf(",C[");
+    for(int i=0; i<6; i++){
+      
+      printMancalaBoard(board->resulting_mancala_boards[i], depth+1);
+      if (i<5){
+        Serial.printf(":");
+      }
+    }
+    Serial.printf("]");
   }
 
   void debug_msg(lv_obj_t *debug_label, const char* text){
+    Serial.printf("Trace of moves = %s\n", gTraceOfMoves);
     lv_label_set_text(debug_label, text);
   }
 
@@ -238,10 +271,13 @@ void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     for (int i=0; i<6; i++){
       init_board->player_A_board_bins[i] = 4;
       init_board->player_B_board_bins[i] = 4;
+      init_board->resulting_mancala_boards[i] = NULL; // this denotes that the children are not filled out
     }
     init_board->player_B_goal = 0;
     init_board->player_A_goal = 0;
     init_board->playerToMove = 'A'; 
+
+    
     return init_board;
   }
   /**
@@ -277,13 +313,28 @@ void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
    * if the bin has marbles and if so it will simulate the player choosing that bin for a move, 
    * and save that board state in an array of children of the board given.
    * 
+   * This function also checks that the children are not already filled out before filling them out.
+   * Its okay for other functions to call this function on boards that already have their children filled out 
+   * 
+   * This function will set the children of the new children to nulls 
+   * 
    * Parameters:
    *  board (mancala_board*): A pointer to a mancala board that is requested to get its children filled out for 
    * 
    * Returns: 
-   *  int: 0 if all is well, -1 if error
+   *  int: 0 if all is well, -1 if error, -2 children already filled out 
    */
   int fillOutChildrenForBoard(mancala_board *board){
+    // if the boards children are already filled out then dont fill out the children. We must confirm that all dont equal null because we set a child as null if the bin is zero .I should get this 'bug' on the second turn becaause dfs fills out children. Not a bug because DFS already filled it out before SingleLayerOutcomes changed to child"); // A function might call fillOutChildrenForBoard if its not filled out as to have only one place in the code for this type of check 
+    for (int i=0; i<6; i++){
+      if (board->resulting_mancala_boards[i] != NULL){
+        Serial.printf("!Bug! FillOutChildren,childrenAlreadyFilledOut\n");
+        Serial.printf("INFO: child[%d].player = 'bruh'", i);
+        debug_msg(debug_label, "!Bug! childrenAlreadyFilledOut");
+        return -2;
+      }
+    }
+    
     uint8_t *first_bins;
     if (board->playerToMove == 'A'){
       first_bins = board->player_A_board_bins;
@@ -301,6 +352,11 @@ void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
         mancala_board simulated_board = simulateMancalaMove(*board, i);
         if (simulated_board.playerToMove == 'X'){
           return -1; // because there was a problem simulating 
+        }
+
+        // before saving simulated_board as a child, set its children to null. We do this because displayMaxGoalOutcomes needs to know if the children are already simulated by display displaySingleLayerOutcomes as not not waist computation 
+        for (int i=0; i<6; i++){
+          simulated_board.resulting_mancala_boards[i] = NULL;
         }
 
         board->resulting_mancala_boards[i] = heapCopyOfMancalaBoard(simulated_board);
@@ -338,6 +394,7 @@ void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     if (fillOutChildrenForBoard(current_board) == -1){
       return; // because there was a malloc error
     }
+    
 
     lv_label_set_text_fmt(label_playerToMove, "PlayerToMove: %c", current_board->playerToMove);
 
@@ -387,9 +444,213 @@ void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
         lv_obj_set_style_bg_color(curr_gui_button, lv_color_hex3(0xb95), 0); // orange brownish
       }
     }
-
-
   }
+  /**
+   * freeEntireMancalaBoard(board*): Given the pointer to a mancala board, this funciton
+   * will free the boards children (recursively) and free the board given.
+   * 
+   * Parameters:
+   *  board (mancala_board*): A pointer to the mancala board that we want to free
+   */
+  void freeEntireMancalaBoard(mancala_board *board){
+    // if the board has children, free them as well
+    for (int i=0; i<6; i++){
+      if (board->resulting_mancala_boards[i] != NULL){ // although we can call free on NULL, if us humans read this this makes more sense
+        freeEntireMancalaBoard(board->resulting_mancala_boards[i]);
+      }
+    }
+    free(board);
+  }
+  /**
+   * boardIsGameOver(board*): Given a pointer to a board this function will determine if the 
+   * game is over and return True if the game is over. A game is over when at least one side of the 
+   * board is completely empty (all zeros in bins).
+   * 
+   * Parameters:
+   *  board (mancala_board*): The pointer to the mancala board we want to test 
+   * 
+   * Returns:
+   *  boolean: True if the mancala board has at least one side of its bins as empty
+   */
+  bool boardIsGameOver(mancala_board *board){
+    int A_bin_zero_count = 0;
+    int B_bin_zero_count = 0;
+    for (int i=0; i<6; i++){
+      if (board->player_A_board_bins[i] == 0){
+        A_bin_zero_count += 1;
+      }
+      if (board->player_B_board_bins[i] == 0){
+        B_bin_zero_count += 1;
+      }
+    }
+    return A_bin_zero_count == 6 || B_bin_zero_count == 6;
+  }
+  /**
+   * getPtrToPlayersBins(board*, playerOfInterest): This function will be given a board, and a player 
+   * of interest and it will return the pointer to the bins of the player of interest.
+   * 
+   * Parameters:
+   *  board (mancala_board*): A pointer to a mancala board
+   *  playerOfInterest (char): A single character ('A' or 'B') representing the player of interest
+   * 
+   * Returns:
+   *  uint8_t*: The pointer to the bins in the given board that corrilate to the playerOfInterest bins
+   */
+  uint8_t *getPtrToPlayersBins(mancala_board *board, char playerOfInterest){
+    if (board->playerToMove == 'A'){
+      return board->player_A_board_bins;
+    } else if (board->playerToMove == 'B'){
+      return board->player_B_board_bins;
+    } else{ // report error if neither players were A or B 
+      Serial.printf("!Bug! getPlayersBins,PlayerInvalid\n");
+      debug_msg(debug_label, "!Bug! getPlayersBins,PlayerInvalid");
+      return NULL;
+    }
+  }
+  /**
+   * findMaxGoalAchievable(board*, playerOfInterest, depth): Given a board, find the maximum achievable
+   * goal of the player of interest given, while only search the depth given. If depth is zero, that means
+   * return the currrent boards goal for the player of interest, if its one, then return the maximum of the children
+   * of this boards.
+   * 
+   * This function will loop over each each of the bins and find its max goal achievalbe for the playerOfInterest
+   * and then this function compares all childrens goals to see which has the best, then this function returns
+   * the best it found.
+   * 
+   * Parameters:
+   *  board (mancala_board*): The mancala board we wish to compute the maximum achievable goal for 
+   *  playerOfInterest (char): The single letter ('A' or 'B') which denotes the goal we want to find the max of
+   *  depth (int): The amount of layers down we want to search and find 
+   * 
+   * Returns:
+   *  int: the best maximum acheivable goal found from the children. -1 if there is an error
+   */
+  int findMaxGoalAchievable(mancala_board *board, char playerOfInterest, int depth){
+    // if the board given is null, that is an error
+    if (board == NULL){
+      Serial.printf("!bug! maxAchievable Board=NuLL");
+      debug_msg(debug_label, "!bug! maxAchievable Board=NuLL");
+      return -1;
+    }
+    // if depth == 0 return the current goal
+    // if the current board given is game over then return the playerOfInterestsGoal
+    if (depth == 0 || boardIsGameOver(board) == true){
+        if (playerOfInterest == 'A'){
+          return board->player_A_goal;
+        } else if (playerOfInterest == 'B'){
+          return board->player_B_goal;
+        } else{ // report error if neither players were A or B 
+          Serial.printf("!Bug! maxAchievoable,PlayerInvalid\n");
+          debug_msg(debug_label, "!Bug! maxAchievalbe,PlayerInvalid");
+          return -1;
+      }
+    }
+    // lets fill out the children for this board, it is expected that there isnt already children 
+    int result = fillOutChildrenForBoard(board);
+    if (result == -1){
+      return -1; // malloc error
+    }
+    // Note: its fine for there to be children because that means we are looking just 1 layer down and the updateSingleLayer func already filled them out for us 
+    // determine the bins of the player to move
+    uint8_t *playersToMove_bins = getPtrToPlayersBins(board, board->playerToMove);
+    if (playersToMove_bins == NULL){
+      Serial.printf("!bug! invalidPlayerfrom,maxAchievable\n");
+      return -1;
+    }
+    // loop over all the bins, if there are marbles, then recursive call to find the max of that child
+    int best_max = -2;
+    for (int i=0; i<6; i++){
+      // if this bin has marbles
+      if (playersToMove_bins[i] >= 1){
+        // find the max goal if we choose this bin to move
+        int child_max = findMaxGoalAchievable(board->resulting_mancala_boards[i], playerOfInterest, depth-1);
+        freeEntireMancalaBoard(board->resulting_mancala_boards[i]);
+        board->resulting_mancala_boards[i] = NULL;
+        if (child_max == -1){ // if there was any type of error, keep passing it up to effectivley cancel this run
+          return -1;
+        }
+        if (best_max == -2 || child_max > best_max){
+          best_max = child_max;
+        }
+      }
+    }
+    return best_max;
+  }
+  /**
+   * displayMaxGoalOutcomes(current_board, depth): This function will be given 
+   * the current board, and it will go over each bin for the current player and calculate the maximum
+   * possible goal amount achieved for the depth given.
+   * This function will call on another function that searches for the maximum possible goal acheieved 
+   * for the given player then compairs the results.
+   * 
+   * Note 1A:
+   *  This function requires that the children get filled out before this function 
+   *  is called because otherwise if we fill  them out we should free them, but we 
+   *  cannot free them if someone else fills them out because what if UpdateSingleLayerOutcomes 
+   *  fills them out and the user presses on the button to chose that outcome then there is no child!
+   * 
+   * Its important to note, the larger the depth the LESS useful the information is because it will show 
+   * similar max values because the game is over. Its more useful for shorter bursts of moves.
+   * 
+   * Parameters:
+   *  current_board (mancala_board*): Pointer to the current board displayed on the screen
+   *  depth (int): The max depth to search for the max, the larger the more computation 
+   * 
+   */
+  void displayMaxGoalOutcomes(mancala_board *current_board, int depth){
+    // we require that the children get filled out before this function. See NOTE 1A in docstring
+    bool good_to_go_there_is_children = false;
+    for (int i=0; i<6; i++){
+      // if we find a child then we are good to go! ✔
+      if (current_board->resulting_mancala_boards[i] != NULL){
+        good_to_go_there_is_children = true;
+        break;
+      }
+    }
+    if (! good_to_go_there_is_children){
+      Serial.printf("!bug! maxGoalOutcomes requires children filled out");
+      debug_msg(debug_label, "!bug! maxGoalOutcome requiresChildren");
+      return;
+    }
+    
+    // determine the bins we are looping over 
+    uint8_t *curr_player_bins;
+    if (current_board->playerToMove == 'A'){
+      curr_player_bins = current_board->player_A_board_bins;
+    } else if (current_board->playerToMove == 'B'){
+      curr_player_bins = current_board->player_B_board_bins;
+    } else{ // report error if neither players were A or B 
+      Serial.printf("!Bug! maxOutComes,PlayerInvalid\n");
+      debug_msg(debug_label, "!Bug! maxOutComes,PlayerInvalid");
+      return;
+    }
+
+    // loop over all the bins, then find the maximum acheviable goal for that bin and display it
+    for (int i=0; i<6; i++){
+      lv_obj_t *curr_label_maxGoal = lv_obj_get_child(gArr_of_max_goal_buttons[i], 0);
+      // if there are marbles in the bins then find the max of it (and that should mean there is a resulting board for this bin already, NOTE 1A)
+      if (curr_player_bins[i] >= 1){ 
+        // if by some mericle there isnt a child for this index, thats a bug, NOTE 1A
+        if (current_board->resulting_mancala_boards[i] == NULL){
+          Serial.printf("!bug! dispMaxOutcomes, expectedAChildIfMarbles>=1\n");
+          debug_msg(debug_label, "!bug! dispMaxOutcomes, expectedAChildIfMarbles>=1");
+          return;
+        }
+
+        int child_max = findMaxGoalAchievable(current_board->resulting_mancala_boards[i], current_board->playerToMove, depth);
+        if (child_max == -1){ // if MALLOC Error
+          return;
+        }
+
+        lv_label_set_text_fmt(curr_label_maxGoal, "%u", child_max);
+      }
+      // if the bin has no marbles then no point of showing max because they cannot player there
+      else{
+        lv_label_set_text(curr_label_maxGoal, "...");
+      }
+    }
+  }
+
   
 
 // EVENT HANDLERS
@@ -413,8 +674,12 @@ void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       gCurrent_mancala_board = gCurrent_mancala_board->resulting_mancala_boards[bin_number];
       free(temp_old_board);
 
+      gTraceOfMoves[gCurrMoveNumber] = (char) bin_number + '0';
+      gCurrMoveNumber += 1;
+
       // call update board using that zeroth bin child
       updateSingleLayerOutcomes(gCurrent_mancala_board);
+      displayMaxGoalOutcomes(gCurrent_mancala_board, gMaxDepth);
     }
   }
 
@@ -432,13 +697,6 @@ void lv_create_main_gui(void) {
     lv_obj_t *tabview_tab_0 = lv_tabview_add_tab(tabview, "Single Layer");
     lv_obj_set_style_bg_color(tabview, lv_color_hex3(0xaaa), 0);
     // Tab View 1 - Single Layer
-        // Create a text label aligned center on top ("Hello, world!")
-          lv_obj_t * welcome_label = lv_label_create(tabview_tab_0);
-          lv_label_set_long_mode(welcome_label, LV_LABEL_LONG_WRAP);    // Breaks the long lines
-          lv_label_set_text_fmt(welcome_label, "Lvgl Text");
-          lv_obj_set_width(welcome_label, 200);    // Set smaller width to make the lines wrap
-          lv_obj_set_style_text_align(welcome_label, LV_TEXT_ALIGN_CENTER, 0);
-          lv_obj_align(welcome_label, LV_ALIGN_TOP_MID, -80, 0);
         
         // Create Debug Label
           debug_label = lv_label_create(tabview_tab_0);
@@ -449,9 +707,15 @@ void lv_create_main_gui(void) {
           label_playerToMove = lv_label_create(tabview_tab_0);
           lv_obj_align(label_playerToMove, LV_ALIGN_CENTER, 0, -30);
           lv_label_set_text(label_playerToMove, "PlayerToMove: X");
+
+        // Max Goal Achievable Label
+          lv_obj_t *label_maxGoalAchievable = lv_label_create(tabview_tab_0);
+          lv_obj_align(label_maxGoalAchievable, LV_ALIGN_CENTER, 0, 30);
+          lv_label_set_text_fmt(label_maxGoalAchievable, "Max Achievable. D=%u", gMaxDepth);
         
         lv_obj_t *btn_label;
         lv_obj_t *bin_button;
+        lv_obj_t *maxGoal_button;
         // Create the row of buttons 
         for (int i=0; i<6; i++){
           bin_button = lv_button_create(tabview_tab_0);
@@ -466,6 +730,21 @@ void lv_create_main_gui(void) {
           lv_label_set_text_fmt(btn_label, "%d fpts", i);
           lv_obj_set_style_text_font(btn_label, &lv_font_montserrat_10, 0);
           lv_obj_center(btn_label);
+
+          maxGoal_button = lv_button_create(tabview_tab_0);
+          gArr_of_max_goal_buttons[i] = maxGoal_button;
+          lv_obj_align(maxGoal_button, LV_ALIGN_LEFT_MID, i*50, 60);
+          lv_obj_set_size(maxGoal_button, lv_pct(15), LV_SIZE_CONTENT);
+          lv_obj_remove_flag(maxGoal_button, LV_OBJ_FLAG_CLICKABLE);
+          lv_obj_set_style_bg_color(maxGoal_button, lv_color_hex(0xf59e0b), 0);
+          lv_obj_set_style_radius(maxGoal_button, 24, 0);
+          lv_obj_set_style_border_color(maxGoal_button, lv_color_hex(0x78350f), 0);
+          lv_obj_set_style_border_width(maxGoal_button, 2, 0);
+
+          btn_label = lv_label_create(maxGoal_button);
+          lv_label_set_text(btn_label, "d max");
+          lv_obj_set_style_text_font(btn_label, &lv_font_montserrat_10, 0);
+          lv_obj_center(btn_label); 
         }
       }
 
@@ -479,6 +758,8 @@ void setup() {
 
   // Define my variables
     gCurrent_mancala_board = createInitBoard();
+    gCurrMoveNumber = 0;
+    gMaxDepth = 2;
   
   // Start LVGL
     lv_init();
@@ -513,6 +794,7 @@ void setup() {
 
   // Update tab 1 with buttons that show the choices for first pick
     updateSingleLayerOutcomes(gCurrent_mancala_board);
+    displayMaxGoalOutcomes(gCurrent_mancala_board, gMaxDepth);
   }
 
 
