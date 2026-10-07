@@ -1,2 +1,0 @@
-#!/bin/bash
-cd /Users/alexmyers/Documents/Mancala-Move-Predictor/VIDEOS-Mancala-Move-Predictor; python3 handbrake_watcher.py
