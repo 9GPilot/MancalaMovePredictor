@@ -43,6 +43,10 @@
     mancala_board *resulting_mancala_boards[6];
   } mancala_board;
 
+// Personal Macros
+// WARNING !! WARNING !! DO NOT CHANGE THIS NUMBER, IT WILL NOT WORK EVERYWHERE!!! Its only implemented from oct10, 2026 onward, not for the past yet
+#define NUM_OF_BINS 6
+
 SPIClass touchscreenSPI = SPIClass(VSPI);
 XPT2046_Touchscreen touchscreen(XPT2046_CS, XPT2046_IRQ);
 
@@ -63,6 +67,7 @@ int x, y, z;
 // My LVGL Objects
   static lv_obj_t *debug_label;
   static lv_obj_t *label_playerToMove;
+  static lv_obj_t *label_nextGoalsOutcomes;
   static lv_obj_t *tabview;
 
 
@@ -330,7 +335,7 @@ void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       if (board->resulting_mancala_boards[i] != NULL){
         Serial.printf("!Bug! FillOutChildren,childrenAlreadyFilledOut\n");
         Serial.printf("INFO: child[%d].player = 'bruh'", i);
-        debug_msg(debug_label, "!Bug! childrenAlreadyFilledOut");
+        debug_msg(debug_label, "!Bug! fOCFB: childrenAlreadyFilledOut");
         return -2;
       }
     }
@@ -401,8 +406,10 @@ void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     // change the background color to reflect which player it is 
     if (current_board->playerToMove == 'A'){
       lv_obj_set_style_bg_color(tabview, lv_color_hex3(0x3aa), 0); // nice blue
+      lv_obj_set_style_bg_color(label_playerToMove, lv_color_hex3(0x4cc), 0);
     } else if (current_board->playerToMove == 'B'){
       lv_obj_set_style_bg_color(tabview, lv_color_hex3(0xe9f), 0); // light purple
+      lv_obj_set_style_bg_color(label_playerToMove, lv_color_hex3(0x94c), 0);
     } else { // if neither playerToMove is found thats a error
       lv_obj_set_style_bg_color(tabview, lv_color_hex3(0xf23), 0); // red for error
       Serial.printf("!Bug! updateOutcomes,PlayerInvalid\n");
@@ -529,7 +536,7 @@ void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     // if the board given is null, that is an error
     if (board == NULL){
       Serial.printf("!bug! maxAchievable Board=NuLL");
-      debug_msg(debug_label, "!bug! maxAchievable Board=NuLL");
+      debug_msg(debug_label, "!bug! fMGA: Board=NuLL, didYouCheckIfBinHadMarbles?");
       return -1;
     }
     // if depth == 0 return the current goal
@@ -555,11 +562,39 @@ void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     uint8_t *playersToMove_bins = getPtrToPlayersBins(board, board->playerToMove);
     if (playersToMove_bins == NULL){
       Serial.printf("!bug! invalidPlayerfrom,maxAchievable\n");
+      debug_msg(debug_label, "!bug! invalidPlayerfrom,maxAchievable");
       return -1;
     }
+    // Thought Note: Right now we are at a child of a PLAYER A board: This board is the result after PLAYER A picked a bin from his side, so lets say this board will have 'next player to move' be PLAYER B. If that is the case then we want PLAYER B to find its most adventagious POSITION AND it will only call "findBestMove" on that child, and return its result; Player B only calling "findBestMove" on that child is simulating playerB playing the best it can and only giving PLAYER A his goal count of that goal because PLAYER B WILL CHOOSE THAT BIN 
+    // Right now if the player of INTEREST is PLAYER A and this boards next player to move is B, then lets find the best move for B to play and only return the "findMaxGoalAchievable" score for that bin, thus simulating PLAYER B FORSURE picking the best possible bin.
+    if (board->playerToMove != playerOfInterest){
+      int me_badguy_best_max = -2; // stores the oponents best max goal count, that way it knowns which bin to pick from 
+      int badguy_max_bin_number = -2; // -2 means unset
+      // now lets find the best bin to pick from 
+      for (int i=0; i<NUM_OF_BINS; i++){
+          // if this bin has marbles, !! WARNING !! if we dont check this then 
+          if (playersToMove_bins[i] >= 1){
+            int child_max = findMaxGoalAchievable(board->resulting_mancala_boards[i], board->playerToMove, depth-1);
+            // I should NOT free yet because ill call findMaxGoalAchievable on that board with the actual `playerOfInterest` after I find my best.
+            if (child_max == -1) return -1; // there was error
+            if (me_badguy_best_max == -2 || child_max > me_badguy_best_max){
+              me_badguy_best_max = child_max;
+              badguy_max_bin_number = i;
+            }
+          }
+        }
+      // I now have my best, lets return the bestMaxGoalAchievable for the actual `playerOfInterest` now assuming I will forsure pick that spot
+      if (badguy_max_bin_number == -2){
+        Serial.printf("!bug! badguyMaxBinNum was -2 meaning it didnt loop? somehow?\n");
+        debug_msg(debug_label, "!bug! badguyMaxBinNum=-2,didntLOOP");
+      }
+      return findMaxGoalAchievable(board->resulting_mancala_boards[badguy_max_bin_number], playerOfInterest, depth-1);
+    }
+
+
     // loop over all the bins, if there are marbles, then recursive call to find the max of that child
     int best_max = -2;
-    for (int i=0; i<6; i++){
+    for (int i=0; i<NUM_OF_BINS; i++){
       // if this bin has marbles
       if (playersToMove_bins[i] >= 1){
         // find the max goal if we choose this bin to move
@@ -636,7 +671,6 @@ void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
           debug_msg(debug_label, "!bug! dispMaxOutcomes, expectedAChildIfMarbles>=1");
           return;
         }
-
         int child_max = findMaxGoalAchievable(current_board->resulting_mancala_boards[i], current_board->playerToMove, depth);
         if (child_max == -1){ // if MALLOC Error
           return;
@@ -683,6 +717,17 @@ void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     }
   }
 
+  /**
+   * This will be called when ever the tab view changes tabs
+   * If we change back to tab 1 (0 index) then reload the buttens with current board and depth (maybe depth changed by user)
+   */
+  static void event_handler_tab_view(lv_event_t *e){
+    if (lv_tabview_get_tab_active(tabview) == 0){
+      updateSingleLayerOutcomes(gCurrent_mancala_board);
+      displayMaxGoalOutcomes(gCurrent_mancala_board, gMaxDepth); 
+    }
+  }
+
 /**
  * Requirements:
  *  - GUI should not show moves that have starting bins of zero
@@ -694,24 +739,49 @@ void lv_create_main_gui(void) {
   // Creating the Tab view
     tabview = lv_tabview_create(lv_screen_active());
     lv_obj_set_size(tabview, lv_pct(100), lv_pct(100));
-    lv_obj_t *tabview_tab_0 = lv_tabview_add_tab(tabview, "Single Layer");
-    lv_obj_set_style_bg_color(tabview, lv_color_hex3(0xaaa), 0);
     // Tab View 1 - Single Layer
+      lv_obj_t *tabview_tab_0 = lv_tabview_add_tab(tabview, "Single Layer");
+      lv_obj_add_event_cb(tabview_tab_0, event_handler_tab_view, LV_EVENT_VALUE_CHANGED, NULL);
+      lv_obj_set_style_bg_color(tabview, lv_color_hex3(0xaaa), 0);
         
         // Create Debug Label
           debug_label = lv_label_create(tabview_tab_0);
-          lv_obj_align(debug_label, LV_ALIGN_TOP_MID, 0, 0);
+          lv_obj_align(debug_label, LV_ALIGN_TOP_MID, 0, -15);
           lv_label_set_text(debug_label, "...");
 
         // Player to move label
+          static bool inited = false;
+          static lv_style_t style_badge; // the blue surrounding the next player to move
+          if (!inited){
+            lv_style_init(&style_badge);
+            lv_style_set_bg_opa(&style_badge, (255*100 / 100));
+            lv_style_set_bg_color(&style_badge, lv_color_hex(0x6366f1));
+            lv_style_set_radius(&style_badge, 100);
+            lv_style_set_pad_hor(&style_badge, 14);
+            lv_style_set_pad_ver(&style_badge, 6);
+            lv_style_set_text_color(&style_badge, lv_color_hex3(0xfff));
+
+            inited = true;
+          }
           label_playerToMove = lv_label_create(tabview_tab_0);
-          lv_obj_align(label_playerToMove, LV_ALIGN_CENTER, 0, -30);
+          lv_obj_align(label_playerToMove, LV_ALIGN_CENTER, 0, -50);
+          lv_obj_set_style_text_align(label_playerToMove, LV_TEXT_ALIGN_LEFT, 0);
           lv_label_set_text(label_playerToMove, "PlayerToMove: X");
+          lv_obj_add_style(label_playerToMove, &style_badge, 0);
+        
+        // Next goals outcomes label
+          label_nextGoalsOutcomes = lv_label_create(tabview_tab_0);
+          lv_obj_align(label_nextGoalsOutcomes, LV_ALIGN_CENTER, 0, -25);
+          lv_label_set_recolor(label_nextGoalsOutcomes, true);
+          lv_label_set_text(label_nextGoalsOutcomes, "Current players goal count after picking that bin.\n #00a000 Green# - Ends up Playing another turn");
+          lv_obj_set_style_text_font(label_nextGoalsOutcomes, &lv_font_montserrat_10, 0);
+
 
         // Max Goal Achievable Label
           lv_obj_t *label_maxGoalAchievable = lv_label_create(tabview_tab_0);
-          lv_obj_align(label_maxGoalAchievable, LV_ALIGN_CENTER, 0, 30);
-          lv_label_set_text_fmt(label_maxGoalAchievable, "Max Achievable. D=%u", gMaxDepth);
+          lv_obj_align(label_maxGoalAchievable, LV_ALIGN_CENTER, 0, 25);
+          lv_label_set_text_fmt(label_maxGoalAchievable, "Max Achievable assuming other player plays their best.\nSearch Depth=%u", gMaxDepth);
+          lv_obj_set_style_text_font(label_maxGoalAchievable, &lv_font_montserrat_10, 0);
         
         lv_obj_t *btn_label;
         lv_obj_t *bin_button;
@@ -746,9 +816,15 @@ void lv_create_main_gui(void) {
           lv_obj_set_style_text_font(btn_label, &lv_font_montserrat_10, 0);
           lv_obj_center(btn_label); 
         }
-      }
+
+    // Tab View 2 - Update Search depth 
+      lv_obj_t *tabview_tab_1 = lv_tabview_add_tab(tabview, "Change Settings");
+      lv_obj_add_event_cb(tabview_tab_1, event_handler_tab_view, LV_EVENT_VALUE_CHANGED, NULL);
+      lv_obj_set_style_bg_color(tabview, lv_color_hex3(0xaaa), 0);
 
 
+
+} // end of main GUI 
 
 
 void setup() {
